@@ -28,7 +28,6 @@
     input[type="range"] { width: 100%; }
     .value { font-variant-numeric: tabular-nums; text-align:right; }
 
-    /* Color theming per panel */
     .panel.red { --c: #d11; --cSoft: rgba(209,17,17,0.08); --cBorder: rgba(209,17,17,0.45); }
     .panel.blue{ --c: #06c; --cSoft: rgba(0,102,204,0.08); --cBorder: rgba(0,102,204,0.45); }
 
@@ -40,7 +39,6 @@
     .panel .status { color: var(--c); }
     .panel input[type="range"] { accent-color: var(--c); }
 
-    /* Layout on small screens */
     @media (max-width: 820px) {
       .panels { grid-template-columns: 1fr; }
     }
@@ -48,12 +46,12 @@
 </head>
 <body>
   <div class="wrap">
-    <h1>Two Sine Waves (One Scope, Independent Controls)</h1>
+    <h1>Two Sine Waves (One Scope, Trigger-Stable)</h1>
 
     <div class="topbar">
       <button id="enableAudio" class="primary">Enable Audio</button>
       <div class="state">Audio: <span id="audioState">not created</span></div>
-      <div class="hint">Click <b>Enable Audio</b>, then start either wave. (Also check tab mute + output device.)</div>
+      <div class="hint">Click <b>Enable Audio</b>, then start either wave.</div>
     </div>
 
     <canvas id="scope" width="900" height="260"></canvas>
@@ -125,7 +123,7 @@
 
 <script>
 (() => {
-  // ---- Shared AudioContext + master output ----
+  // -------- Shared AudioContext + master output --------
   let audioCtx = null;
   let masterGain = null;
 
@@ -178,9 +176,54 @@
     if (!audioCtx || audioCtx.state !== "running") unlockAudio();
   });
 
-  // ---- Shared scope canvas draws BOTH analysers ----
+  // -------- Shared scope (draw both, with trigger) --------
   const scope = document.getElementById("scope");
   const g2 = scope.getContext("2d", { alpha: false });
+
+  // Trigger settings:
+  const TRIGGER_LEVEL = 128;   // 0..255 (128 ~ "zero" for time-domain)
+  const TRIGGER_HYST  = 2;     // hysteresis band to avoid noise-triggering
+  const MIN_SLOPE     = 0;     // increase to require a steeper rise (0 is fine for pure sines)
+
+  function findRisingTriggerIndex(buf) {
+    // Find index i where we cross from below (level - hyst) to above (level + hyst).
+    const low  = TRIGGER_LEVEL - TRIGGER_HYST;
+    const high = TRIGGER_LEVEL + TRIGGER_HYST;
+
+    // Start a little in to avoid edge weirdness
+    for (let i = 1; i < buf.length; i++) {
+      const a = buf[i - 1];
+      const b = buf[i];
+      if (a <= low && b >= high) {
+        if (MIN_SLOPE <= 0 || (b - a) >= MIN_SLOPE) return i;
+      }
+    }
+    return 0;
+  }
+
+  function drawTriggeredWave(data, strokeStyle) {
+    const W = scope.width, H = scope.height;
+
+    const start = findRisingTriggerIndex(data);
+    const N = data.length;
+
+    g2.strokeStyle = strokeStyle;
+    g2.lineWidth = 2;
+    g2.beginPath();
+
+    // Sample mapping: walk across the canvas, pulling samples from data starting at trigger index.
+    // Step can be >1 if N is much larger than width, but this keeps it simple.
+    const step = N / W;
+
+    for (let x = 0; x < W; x++) {
+      const idx = (start + Math.floor(x * step)) % N;
+      const v = data[idx] / 255;   // 0..1
+      const y = v * H;             // 0..H
+      if (x === 0) g2.moveTo(x, y);
+      else g2.lineTo(x, y);
+    }
+    g2.stroke();
+  }
 
   function drawSharedScope(aCtrl, bCtrl) {
     const W = scope.width, H = scope.height;
@@ -193,15 +236,9 @@
       g2.fillStyle = "#fafafa";
       g2.fillRect(0, 0, W, H);
 
-      // grid + midline
-      g2.strokeStyle = "#ddd";
-      g2.lineWidth = 1;
-      g2.beginPath();
-      g2.moveTo(0, mid); g2.lineTo(W, mid);
-      g2.stroke();
-
-      // faint vertical grid
+      // grid
       g2.strokeStyle = "#eee";
+      g2.lineWidth = 1;
       g2.beginPath();
       const cols = 10;
       for (let i = 1; i < cols; i++) {
@@ -211,7 +248,13 @@
       }
       g2.stroke();
 
-      // If nothing is running, show hint
+      // midline
+      g2.strokeStyle = "#ddd";
+      g2.beginPath();
+      g2.moveTo(0, mid);
+      g2.lineTo(W, mid);
+      g2.stroke();
+
       if (!aCtrl.analyser && !bCtrl.analyser) {
         g2.fillStyle = "#777";
         g2.font = "14px system-ui, -apple-system, Segoe UI, Roboto, Arial";
@@ -219,45 +262,22 @@
         return;
       }
 
-      // Draw A (red)
+      // Acquire buffers and draw each wave, triggered
       if (aCtrl.analyser) {
         aCtrl.analyser.getByteTimeDomainData(aCtrl.data);
-        g2.strokeStyle = "#d11";
-        g2.lineWidth = 2;
-        g2.beginPath();
-        const slice = W / (aCtrl.data.length - 1);
-        for (let i = 0; i < aCtrl.data.length; i++) {
-          const v = aCtrl.data[i] / 255;
-          const y = v * H;
-          const x = i * slice;
-          if (i === 0) g2.moveTo(x, y);
-          else g2.lineTo(x, y);
-        }
-        g2.stroke();
+        drawTriggeredWave(aCtrl.data, "#d11");
       }
-
-      // Draw B (blue)
       if (bCtrl.analyser) {
         bCtrl.analyser.getByteTimeDomainData(bCtrl.data);
-        g2.strokeStyle = "#06c";
-        g2.lineWidth = 2;
-        g2.beginPath();
-        const slice = W / (bCtrl.data.length - 1);
-        for (let i = 0; i < bCtrl.data.length; i++) {
-          const v = bCtrl.data[i] / 255;
-          const y = v * H;
-          const x = i * slice;
-          if (i === 0) g2.moveTo(x, y);
-          else g2.lineTo(x, y);
-        }
-        g2.stroke();
+        drawTriggeredWave(bCtrl.data, "#06c");
       }
     }
-
     draw();
   }
 
-  // ---- Per-wave controller (independent) ----
+  // -------- Per-wave controller (independent) --------
+  const FFT_SIZE = 8192; // bigger = slower-looking and more stable
+
   function createWaveController(rootEl) {
     const toggleBtn = rootEl.querySelector(".toggle");
     const muteBtn   = rootEl.querySelector(".mute");
@@ -277,8 +297,7 @@
     let muted = false;
     let lastAmpBeforeMute = parseFloat(ampSlider.value);
 
-    const analyserSize = 2048;
-    const data = new Uint8Array(analyserSize);
+    const data = new Uint8Array(FFT_SIZE);
 
     function updateLabels() {
       freqValEl.textContent = String(freqSlider.value);
@@ -301,9 +320,9 @@
       gain.gain.value = muted ? 0 : parseFloat(ampSlider.value);
 
       analyser = ac.createAnalyser();
-      analyser.fftSize = analyserSize;
+      analyser.fftSize = FFT_SIZE;
+      analyser.smoothingTimeConstant = 0.85;
 
-      // Route: osc -> gain -> analyser -> master
       osc.connect(gain);
       gain.connect(analyser);
       analyser.connect(masterGain);
@@ -319,7 +338,6 @@
         running = true;
         setStatus();
       } catch (e) {
-        // Rebuild if oscillator was already started previously
         console.warn("osc.start failed; rebuilding", e);
         stop(true);
         ensureNodes();
@@ -362,7 +380,6 @@
       }
     }
 
-    // Wire UI
     updateLabels();
     setStatus();
 
@@ -399,7 +416,6 @@
       }
     });
 
-    // Expose analyser + buffer for the shared scope
     return {
       get analyser() { return analyser; },
       data

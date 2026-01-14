@@ -11,7 +11,7 @@
     .freq { width: 90px; font-variant-numeric: tabular-nums; }
     input[type="range"] { width: min(520px, 60vw); }
     button { padding: 6px 10px; }
-    .hint { opacity: 0.8; margin-top: 8px; }
+    .hint { opacity: 0.8; margin: 8px 0 14px; }
   </style>
 </head>
 <body>
@@ -19,34 +19,48 @@
 
   <button id="enableBtn">Enable Audio</button>
   <div class="hint">
-    If you don’t hear anything on iPhone/Safari, tap <b>Enable Audio</b> first (browser requirement).
+    Tap <b>Enable Audio</b> once (especially on iPhone/Safari). Then use Start/Stop.
   </div>
 
   <div id="controls"></div>
 
   <script>
-    // ---- Audio setup (created lazily on first user gesture) ----
+    // ---------- UI FIRST (no audio touched yet) ----------
+    const controls = document.getElementById("controls");
+
+    for (let i = 0; i < 5; i++) {
+      const row = document.createElement("div");
+      row.className = "row";
+      row.innerHTML = `
+        <label>Wave ${i + 1}</label>
+        <input type="range" min="50" max="1000" step="1" value="440">
+        <span class="freq">440 Hz</span>
+        <button>Start</button>
+      `;
+      controls.appendChild(row);
+    }
+
+    // ---------- AUDIO LAZY-INIT ----------
     let audioContext = null;
     let masterGain = null;
 
-    // Safer levels: 5 sines summed can get loud. Master gain keeps headroom.
-    const MASTER_GAIN_VALUE = 0.25;  // overall volume
-    const WAVE_ON_GAIN_VALUE = 0.20; // per-wave volume when "on"
+    const MASTER_GAIN_VALUE = 0.25;  // overall
+    const WAVE_ON_GAIN_VALUE = 0.20; // per wave
 
-    const waves = []; // store { osc, gain, isPlaying, slider, freqSpan, button }
-
-    function ensureAudio() {
+    function ensureAudioContext() {
       if (!audioContext) {
-        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (!Ctx) throw new Error("Web Audio API not supported in this browser.");
+        audioContext = new Ctx();
+
         masterGain = audioContext.createGain();
         masterGain.gain.value = MASTER_GAIN_VALUE;
         masterGain.connect(audioContext.destination);
       }
-      return audioContext;
     }
 
     async function enableAudio() {
-      ensureAudio();
+      ensureAudioContext();
       if (audioContext.state !== "running") {
         await audioContext.resume();
       }
@@ -55,28 +69,72 @@
     document.getElementById("enableBtn").addEventListener("click", async () => {
       try {
         await enableAudio();
-        document.getElementById("enableBtn").textContent =
-          (audioContext.state === "running") ? "Audio Enabled" : "Enable Audio";
-      } catch (e) {
-        alert("Could not start audio. Try again, and make sure Silent Mode is off.");
-        console.error(e);
+        document.getElementById("enableBtn").textContent = "Audio Enabled";
+      } catch (err) {
+        console.error(err);
+        alert("Could not enable audio. Check Silent Mode / permissions / browser support.");
       }
     });
 
-    // ---- UI + waves ----
-    function createWaveControl(index) {
-      // Build UI first
-      const container = document.createElement("div");
-      container.className = "row";
+    // one wave state per row
+    const waveStates = Array.from({ length: 5 }, () => ({
+      osc: null,
+      gain: null,
+      isPlaying: false,
+      freq: 440
+    }));
 
-      const label = document.createElement("label");
-      label.textContent = `Wave ${index + 1}`;
+    // Wire up each row
+    document.querySelectorAll("#controls .row").forEach((row, i) => {
+      const slider = row.querySelector('input[type="range"]');
+      const freqSpan = row.querySelector(".freq");
+      const btn = row.querySelector("button");
+      const state = waveStates[i];
 
-      const slider = document.createElement("input");
-      slider.type = "range";
-      slider.min = "50";
-      slider.max = "1000";
-      slider.step = "1";
-      slider.value = "440";
+      slider.addEventListener("input", () => {
+        state.freq = Number(slider.value);
+        freqSpan.textContent = `${state.freq} Hz`;
+        // If oscillator exists, update it live
+        if (state.osc && audioContext) {
+          state.osc.frequency.setValueAtTime(state.freq, audioContext.currentTime);
+        }
+      });
 
-      cons
+      btn.addEventListener("click", async () => {
+        try {
+          // Always ensure audio from a gesture
+          await enableAudio();
+
+          if (!state.osc) {
+            // Create nodes only when first started (gesture-safe)
+            state.osc = audioContext.createOscillator();
+            state.osc.type = "sine";
+            state.osc.frequency.value = state.freq;
+
+            state.gain = audioContext.createGain();
+            state.gain.gain.value = 0;
+
+            state.osc.connect(state.gain).connect(masterGain);
+            state.osc.start();
+          }
+
+          state.isPlaying = !state.isPlaying;
+
+          const now = audioContext.currentTime;
+          state.gain.gain.cancelScheduledValues(now);
+          state.gain.gain.setValueAtTime(state.gain.gain.value, now);
+          state.gain.gain.linearRampToValueAtTime(
+            state.isPlaying ? WAVE_ON_GAIN_VALUE : 0,
+            now + 0.02
+          );
+
+          btn.textContent = state.isPlaying ? "Stop" : "Start";
+        } catch (err) {
+          console.error(err);
+          alert("Audio could not start. Try clicking Enable Audio first.");
+        }
+      });
+    });
+  </script>
+</body>
+</html>

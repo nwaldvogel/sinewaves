@@ -1,78 +1,82 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Sine Wave Controls with Start/Stop</title>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Five Sine Waves</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding: 16px; }
+    .row { display: flex; align-items: center; gap: 12px; margin: 10px 0; }
+    .row label { width: 70px; }
+    .freq { width: 90px; font-variant-numeric: tabular-nums; }
+    input[type="range"] { width: min(520px, 60vw); }
+    button { padding: 6px 10px; }
+    .hint { opacity: 0.8; margin-top: 8px; }
+  </style>
 </head>
 <body>
-    <h1>Control Five Sine Waves with Start/Stop</h1>
-    
-    <div id="controls"></div>
-    
-    <script>
-        // Create an AudioContext
-        const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-        
-        // Function to create a sine wave, slider, and start/stop button
-        function createSineWaveControl(index) {
-            // Create an oscillator and gain node
-            const oscillator = audioContext.createOscillator();
-            oscillator.type = 'sine';
-            oscillator.frequency.value = 440; // Default frequency in Hz
-            
-            const gainNode = audioContext.createGain();
-            gainNode.gain.value = 0; // Start silent until started
-            
-            oscillator.connect(gainNode).connect(audioContext.destination);
-            oscillator.start();
+  <h1>Five Sine Waves</h1>
 
-            // Create a container for each wave's controls
-            const container = document.createElement('div');
-            container.style.marginBottom = '10px';
+  <button id="enableBtn">Enable Audio</button>
+  <div class="hint">
+    If you don’t hear anything on iPhone/Safari, tap <b>Enable Audio</b> first (browser requirement).
+  </div>
 
-            // Create a label for the frequency
-            const label = document.createElement('label');
-            label.textContent = `Wave ${index + 1} Frequency: `;
+  <div id="controls"></div>
 
-            // Create a slider for the frequency
-            const slider = document.createElement('input');
-            slider.type = 'range';
-            slider.min = 100;
-            slider.max = 2000;
-            slider.value = 440;
-            slider.oninput = function() {
-                oscillator.frequency.value = this.value;
-            };
+  <script>
+    // ---- Audio setup (created lazily on first user gesture) ----
+    let audioContext = null;
+    let masterGain = null;
 
-            // Create a start/stop button
-            const button = document.createElement('button');
-            button.textContent = 'Start';
-            let isPlaying = false;
+    // Safer levels: 5 sines summed can get loud. Master gain keeps headroom.
+    const MASTER_GAIN_VALUE = 0.25;  // overall volume
+    const WAVE_ON_GAIN_VALUE = 0.20; // per-wave volume when "on"
 
-            button.onclick = function() {
-                if (isPlaying) {
-                    gainNode.gain.value = 0; // Mute the wave
-                    button.textContent = 'Start';
-                } else {
-                    gainNode.gain.value = 1; // Unmute the wave
-                    button.textContent = 'Stop';
-                }
-                isPlaying = !isPlaying;
-            };
+    const waves = []; // store { osc, gain, isPlaying, slider, freqSpan, button }
 
-            // Append elements to the container
-            container.appendChild(label);
-            container.appendChild(slider);
-            container.appendChild(button);
-            
-            // Add the container to the controls div
-            document.getElementById('controls').appendChild(container);
-        }
-        
-        // Create five sine wave controls
-        for (let i = 0; i < 5; i++) {
-            createSineWaveControl(i);
-        }
-    </script>
-</body>
-</html>
+    function ensureAudio() {
+      if (!audioContext) {
+        audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        masterGain = audioContext.createGain();
+        masterGain.gain.value = MASTER_GAIN_VALUE;
+        masterGain.connect(audioContext.destination);
+      }
+      return audioContext;
+    }
+
+    async function enableAudio() {
+      ensureAudio();
+      if (audioContext.state !== "running") {
+        await audioContext.resume();
+      }
+    }
+
+    document.getElementById("enableBtn").addEventListener("click", async () => {
+      try {
+        await enableAudio();
+        document.getElementById("enableBtn").textContent =
+          (audioContext.state === "running") ? "Audio Enabled" : "Enable Audio";
+      } catch (e) {
+        alert("Could not start audio. Try again, and make sure Silent Mode is off.");
+        console.error(e);
+      }
+    });
+
+    // ---- UI + waves ----
+    function createWaveControl(index) {
+      // Build UI first
+      const container = document.createElement("div");
+      container.className = "row";
+
+      const label = document.createElement("label");
+      label.textContent = `Wave ${index + 1}`;
+
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = "50";
+      slider.max = "1000";
+      slider.step = "1";
+      slider.value = "440";
+
+      cons
